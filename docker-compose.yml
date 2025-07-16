@@ -1,0 +1,155 @@
+version: '3.8'
+
+services:
+  # PostgreSQL database for relational data
+  postgres:
+    image: postgres:14
+    container_name: mag7-postgres
+    environment:
+      POSTGRES_USER: mag7user
+      POSTGRES_PASSWORD: mag7password
+      POSTGRES_DB: mag7db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - mag7-network
+
+  # Redis for caching and session management
+  redis:
+    image: redis:6.2-alpine
+    container_name: mag7-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - mag7-network
+
+  # InfluxDB for time-series data
+  influxdb:
+    image: influxdb:2.0
+    container_name: mag7-influxdb
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=mag7user
+      - DOCKER_INFLUXDB_INIT_PASSWORD=mag7password
+      - DOCKER_INFLUXDB_INIT_ORG=mag7org
+      - DOCKER_INFLUXDB_INIT_BUCKET=market_data
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=mag7token
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+    restart: unless-stopped
+    networks:
+      - mag7-network
+
+  # Backend API service
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mag7-backend
+    environment:
+      - DATABASE_URL=postgresql://mag7user:mag7password@postgres:5432/mag7db
+      - REDIS_URL=redis://redis:6379/0
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=mag7token
+      - INFLUXDB_ORG=mag7org
+      - INFLUXDB_BUCKET=market_data
+      - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+      - influxdb
+    volumes:
+      - ./backend:/app
+    restart: unless-stopped
+    networks:
+      - mag7-network
+
+  # Frontend web application
+  frontend:
+    build:
+      context: ./mag7-7dte-frontend
+      dockerfile: Dockerfile
+    container_name: mag7-frontend
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    volumes:
+      - ./mag7-7dte-frontend:/app
+      - /app/node_modules
+    restart: unless-stopped
+    networks:
+      - mag7-network
+
+  # Data feed service for market data ingestion
+  data-feed:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.data-feed
+    container_name: mag7-data-feed
+    environment:
+      - DATABASE_URL=postgresql://mag7user:mag7password@postgres:5432/mag7db
+      - REDIS_URL=redis://redis:6379/0
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=mag7token
+      - INFLUXDB_ORG=mag7org
+      - INFLUXDB_BUCKET=market_data
+      - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY}
+    depends_on:
+      - postgres
+      - redis
+      - influxdb
+    volumes:
+      - ./backend:/app
+    restart: unless-stopped
+    networks:
+      - mag7-network
+
+  # Signal generation service
+  signal-generator:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.signal-generator
+    container_name: mag7-signal-generator
+    environment:
+      - DATABASE_URL=postgresql://mag7user:mag7password@postgres:5432/mag7db
+      - REDIS_URL=redis://redis:6379/0
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=mag7token
+      - INFLUXDB_ORG=mag7org
+      - INFLUXDB_BUCKET=market_data
+    depends_on:
+      - postgres
+      - redis
+      - influxdb
+      - data-feed
+    volumes:
+      - ./backend:/app
+    restart: unless-stopped
+    networks:
+      - mag7-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  influxdb_data:
+
+networks:
+  mag7-network:
+    driver: bridge
+
